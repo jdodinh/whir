@@ -23,7 +23,7 @@ use rand_chacha::ChaCha20Rng;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-pub struct Prover<F, MerkleConfig, PowStrategy>(StirConfig<F, MerkleConfig, PowStrategy>)
+pub struct Prover<F, MerkleConfig, PowStrategy>(pub StirConfig<F, MerkleConfig, PowStrategy>)
 where
     F: FftField,
     MerkleConfig: Config;
@@ -35,7 +35,7 @@ where
     MerkleConfig::InnerDigest: AsRef<[u8]>,
     PowStrategy: nimue_pow::PowStrategy,
 {
-    fn validate_config(config: &StirConfig<F, MerkleConfig, PowStrategy>) {
+    fn validate_parameters(&self) -> bool {
         // Check that for each round the repetition parameters are appropriate.
         // This is the inequality from Construction 5.2, bullet point 6.
         // let mut degree = 1 << self.0.uv_parameters.log_degree;
@@ -47,33 +47,24 @@ where
         // }
 
         // Check that the degrees add up
-        assert_eq!(
-            config.uv_parameters.log_degree,
-            (config.round_parameters.len() + 1) * config.folding_factor + config.final_log_degree,
-        )
+        self.0.uv_parameters.log_degree
+            == (self.0.round_parameters.len() + 1) * self.0.folding_factor + self.0.final_log_degree
     }
 
-    fn validate_witness(&self, witness: &Witness<F, MerkleConfig>) {
-        assert_eq!(
-            (witness.polynomial.degree() + 1),
-            1 << self.0.uv_parameters.log_degree,
-        )
-    }
-
-    pub fn new(config: StirConfig<F, MerkleConfig, PowStrategy>) -> Self {
-        Self::validate_config(&config);
-        Self(config)
+    fn validate_witness(&self, witness: &Witness<F, MerkleConfig>) -> bool {
+        (witness.polynomial.degree() + 1) == 1 << self.0.uv_parameters.log_degree
     }
 
     pub fn prove(
         &self,
         merlin: &mut Merlin,
         witness: &Witness<F, MerkleConfig>,
-    ) -> ProofResult<StirProof<F, MerkleConfig>>
+    ) -> ProofResult<StirProof<MerkleConfig, F>>
     where
         Merlin: FieldChallenges<F> + ByteWriter,
     {
-        self.validate_witness(witness);
+        assert!(self.validate_parameters());
+        assert!(self.validate_witness(&witness));
 
         let [r_fold] = merlin.challenge_scalars()?;
 
@@ -133,8 +124,6 @@ where
         // They also partially overlap and undo one another. We should merge them.
         let g_evals_folded = utils::stack_evaluations(g_evals, self.0.folding_factor);
 
-        // TODO: if fold_type is always Naive, this is just an assertion, nothing happens here
-        //
         // At this point folded evals is a matrix of size (new_domain.size()) X (1 << folding_factor)
         // This allows for the evaluation of the virutal function using an interpolation on the rows.
         // TODO: for stir we do only Naive, so this will need to be adapted.
@@ -189,7 +178,7 @@ where
         let virtual_evals = self.indexes_to_coset_evaluations(
             r_shift_indexes.clone(),
             1 << self.0.folding_factor,
-            evals,
+            &evals,
         );
 
         // Merkle proof for the previous evaluations.
@@ -280,7 +269,7 @@ where
         &self,
         merlin: &mut Merlin,
         mut ctx: RoundContext<F, MerkleConfig>,
-    ) -> ProofResult<StirProof<F, MerkleConfig>> {
+    ) -> ProofResult<StirProof<MerkleConfig, F>> {
         // Fold the coefficients
         let g_poly = Self::fold(&ctx.f_poly, ctx.r_fold, self.0.folding_factor);
 
@@ -297,16 +286,16 @@ where
             merlin.challenge_pow::<PowStrategy>(self.0.final_pow_bits)?;
         }
 
-        Ok(StirProof {
+        return Ok(StirProof {
             merkle_proofs: ctx.merkle_proofs,
-        })
+        });
     }
 
     fn indexes_to_coset_evaluations(
         &self,
         stir_challenges_indexes: Vec<usize>,
         fold_size: usize,
-        evals: &[F],
+        evals: &Vec<F>,
     ) -> Vec<Vec<F>>
     where
         F: FftField,
