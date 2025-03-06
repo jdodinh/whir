@@ -116,7 +116,7 @@ where
         DensePolynomial::from_coefficients_vec(coeffs)
     }
 
-    fn folding_phase(
+    fn round_phase1(
         &self,
         g_poly: &DensePolynomial<F>,
         ctx: &RoundContext<F, MerkleConfig>,
@@ -165,7 +165,8 @@ where
         (g_domain, g_evals_folded, g_merkle)
     }
 
-    fn stir_phase(
+    // TODO: rename
+    fn round_part(
         &self,
         merlin: &mut Merlin,
         num_queries: usize,
@@ -210,13 +211,14 @@ where
         // Fold the coefficients
         let g_poly = Self::fold(&ctx.f_poly, ctx.r_fold, self.0.folding_factor);
 
-        // PHASE 1 (folding):
-        let (g_domain, g_evals_folded, g_merkle) = self.folding_phase(&g_poly, ctx);
+        // PHASE 1:
+        let (g_domain, g_evals_folded, g_merkle) = self.round_phase1(&g_poly, ctx);
         let g_root = g_merkle.root();
         // Commit to (aka Send) the polynomial.
         merlin.add_bytes(g_root.as_ref())?;
 
-        // PHASE 2 (OOD sampling):
+        // PHASE 2:
+        // OOD Sampling
         // These are the ri_out's from the paper.
         let mut ood_points = vec![F::ZERO; round_config.ood_samples];
         // These are the beta's from the paper.
@@ -230,8 +232,9 @@ where
             )?;
         }
 
-        // PHASE 3 (STIR queries):
-        let r_shift_indexes = self.stir_phase(merlin, round_config.num_queries, ctx)?;
+        // PHASE 3:
+        // STIR queries
+        let r_shift_indexes = self.round_part(merlin, round_config.num_queries, ctx)?;
         let l_k = ctx
             .f_domain
             .scale(1 << self.0.folding_factor)
@@ -287,7 +290,7 @@ where
         // Send the coefficients directly
         merlin.add_scalars(&p_poly)?;
 
-        self.stir_phase(merlin, self.0.final_queries, &mut ctx)?;
+        self.round_part(merlin, self.0.final_queries, &mut ctx)?;
 
         // PoW
         if self.0.final_pow_bits > 0. {
